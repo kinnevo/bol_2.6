@@ -11,12 +11,18 @@ const GameRoom = ({ room, gameState, playerName, onGameAction }) => {
       setGameData({
         currentPlayer: 0,
         turn: 1,
-        players: room.players.map((playerId, index) => ({
-          id: playerId,
-          name: `Player ${index + 1}`,
-          score: 0,
-          isActive: index === 0
-        }))
+        players: room.players.map((playerId, index) => {
+          const playerName = room.playerNames ? 
+            room.playerNames.find(p => p.id === playerId)?.name || `Player ${index + 1}` :
+            `Player ${index + 1}`;
+          
+          return {
+            id: playerId,
+            name: playerName,
+            score: 0,
+            isActive: index === 0
+          };
+        })
       });
     }
   }, [room, gameState, gameData]);
@@ -44,14 +50,20 @@ const GameRoom = ({ room, gameState, playerName, onGameAction }) => {
           <p>Players in room: {room.players.length}/{room.maxPlayers}</p>
           
           <div className="players-waiting">
-            {room.players.map((playerId, index) => (
-              <div key={playerId} className="waiting-player">
-                <div className="player-avatar">
-                  {(index + 1).toString()}
+            {room.players.map((playerId, index) => {
+              const playerName = room.playerNames ? 
+                room.playerNames.find(p => p.id === playerId)?.name || `Player ${index + 1}` :
+                `Player ${index + 1}`;
+              
+              return (
+                <div key={playerId} className="waiting-player">
+                  <div className="player-avatar">
+                    {playerName.charAt(0).toUpperCase()}
+                  </div>
+                  <span>{playerName}</span>
                 </div>
-                <span>Player {index + 1}</span>
-              </div>
-            ))}
+              );
+            })}
             
             {/* Show empty slots */}
             {Array.from({ length: room.maxPlayers - room.players.length }).map((_, index) => (
@@ -196,7 +208,7 @@ const GameRoom = ({ room, gameState, playerName, onGameAction }) => {
                   className={`player-card ${player.isActive ? 'active' : ''}`}
                 >
                   <div className="player-avatar small">
-                    {index + 1}
+                    {player.name.charAt(0).toUpperCase()}
                   </div>
                   <div className="player-details">
                     <div className="player-name">{player.name}</div>

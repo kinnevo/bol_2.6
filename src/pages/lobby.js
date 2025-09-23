@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import useSocket from '../hooks/useSocket';
 import PlayerList from '../components/PlayerList';
 import RoomList from '../components/RoomList';
+import { checkBrowserSession, setupLogoutListener, clearBrowserSession, startSessionHeartbeat } from '../utils/browserSession';
 
 const LobbyPage = () => {
   const [playerName, setPlayerName] = useState('');
@@ -17,6 +18,20 @@ const LobbyPage = () => {
   const { socket, isConnected, disconnect } = useSocket();
 
   useEffect(() => {
+    // Set up listener for forced logout from other tabs
+    const cleanupLogoutListener = setupLogoutListener(() => {
+      alert('🚫 You have been logged out because someone else logged in this browser.');
+      clearBrowserSession();
+      navigate('/?logout=true');
+    });
+    
+    // Check browser session first
+    const currentSession = checkBrowserSession();
+    if (!currentSession) {
+      navigate('/');
+      return;
+    }
+    
     // Get player name from sessionStorage first (unique per tab), fallback to localStorage
     let storedName = sessionStorage.getItem('playerName');
     if (!storedName) {
@@ -28,11 +43,30 @@ const LobbyPage = () => {
       return;
     }
     
+    // Verify the stored name matches the browser session
+    if (currentSession.user !== storedName) {
+      console.log('🚫 Session mismatch. Browser session:', currentSession.user, 'Stored name:', storedName);
+      navigate('/');
+      return;
+    }
+    
     // Store in sessionStorage for this tab
     sessionStorage.setItem('playerName', storedName);
     setPlayerName(storedName);
+    
+    // Start session heartbeat to keep session alive
+    const cleanupHeartbeat = startSessionHeartbeat(storedName);
+    
+    return () => {
+      cleanupLogoutListener();
+      cleanupHeartbeat();
+    };
+  }, [navigate]);
 
-    if (socket && isConnected) {
+  useEffect(() => {
+    const storedName = sessionStorage.getItem('playerName');
+    
+    if (socket && isConnected && storedName) {
       // Join lobby
       socket.emit('join-lobby', { name: storedName });
 
@@ -74,6 +108,12 @@ const LobbyPage = () => {
         alert(error);
       });
 
+      socket.on('name-taken', (data) => {
+        alert(`❌ ${data.message}`);
+        // Redirect back to login page to choose a different name
+        navigate('/?name-conflict=true');
+      });
+
       socket.on('create-room-error', (error) => {
         setIsCreatingRoom(false);
         alert(error);
@@ -86,14 +126,33 @@ const LobbyPage = () => {
         socket.off('room-created');
         socket.off('room-joined');
         socket.off('join-room-error');
+        socket.off('name-taken');
         socket.off('create-room-error');
       };
     }
   }, [socket, isConnected, navigate]);
 
-  const handleCreateRoom = (e) => {
+  const checkRoomNameAvailability = async (name) => {
+    try {
+      const response = await fetch('http://localhost:3001/api/check-room-name', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ name: name.trim() })
+      });
+      
+      const result = await response.json();
+      return result;
+    } catch (error) {
+      console.error('Error checking room name availability:', error);
+      return { available: true, message: 'Unable to check room name availability' };
+    }
+  };
+
+  const handleCreateRoom = async (e) => {
     e.preventDefault();
-    
+
     if (!roomName.trim()) {
       alert('Please enter a room name');
       return;
@@ -106,6 +165,13 @@ const LobbyPage = () => {
 
     if (roomName.trim().length > 30) {
       alert('Room name must be less than 30 characters');
+      return;
+    }
+
+    // Check if room name is available
+    const nameCheck = await checkRoomNameAvailability(roomName.trim());
+    if (!nameCheck.available) {
+      alert(`❌ ${nameCheck.message}`);
       return;
     }
 
@@ -128,9 +194,7 @@ const LobbyPage = () => {
   };
 
   const handleLogout = () => {
-    sessionStorage.removeItem('playerName');
-    localStorage.removeItem('playerName');
-    localStorage.removeItem('currentRoom');
+    clearBrowserSession(); // Clear browser-wide session
     disconnect(); // Properly disconnect the socket
     navigate('/?logout=true');
   };

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import useSocket from '../hooks/useSocket';
 import GameRoom from '../components/GameRoom';
+import { checkBrowserSession, setupLogoutListener, clearBrowserSession } from '../utils/browserSession';
 
 const GamePage = () => {
   const { roomId } = useParams();
@@ -14,6 +15,20 @@ const GamePage = () => {
   const { socket, isConnected } = useSocket();
 
   useEffect(() => {
+    // Set up listener for forced logout from other tabs
+    const cleanupLogoutListener = setupLogoutListener(() => {
+      alert('🚫 You have been logged out because someone else logged in this browser.');
+      clearBrowserSession();
+      navigate('/?logout=true');
+    });
+    
+    // Check browser session first
+    const currentSession = checkBrowserSession();
+    if (!currentSession) {
+      navigate('/');
+      return;
+    }
+    
     // Get player name from sessionStorage first (unique per tab), fallback to localStorage
     let storedName = sessionStorage.getItem('playerName');
     if (!storedName) {
@@ -25,11 +40,24 @@ const GamePage = () => {
       return;
     }
     
+    // Verify the stored name matches the browser session
+    if (currentSession.user !== storedName) {
+      console.log('🚫 Session mismatch in game page. Browser session:', currentSession.user, 'Stored name:', storedName);
+      navigate('/');
+      return;
+    }
+    
     // Store in sessionStorage for this tab
     sessionStorage.setItem('playerName', storedName);
     setPlayerName(storedName);
+    
+    return cleanupLogoutListener;
+  }, [navigate]);
 
-    if (socket && isConnected && roomId) {
+  useEffect(() => {
+    const storedName = sessionStorage.getItem('playerName');
+    
+    if (socket && isConnected && roomId && storedName) {
       console.log('🎮 Game page: Socket ID:', socket.id, 'Joining room:', roomId);
       
       // Since socket persists, we should already be in lobby, just join the room
@@ -73,6 +101,12 @@ const GamePage = () => {
         console.log('Game ended:', result);
       });
 
+      socket.on('name-taken', (data) => {
+        alert(`❌ ${data.message}`);
+        // Redirect back to login page to choose a different name
+        navigate('/?name-conflict=true');
+      });
+
       return () => {
         socket.off('lobby-joined');
         socket.off('room-joined');
@@ -82,6 +116,7 @@ const GamePage = () => {
         socket.off('join-room-error');
         socket.off('game-updated');
         socket.off('game-ended');
+        socket.off('name-taken');
       };
     }
   }, [socket, isConnected, roomId, navigate]);
@@ -150,6 +185,10 @@ const GamePage = () => {
           </div>
         </div>
         
+        <div className="player-info">
+          <span>Welcome, {playerName}!</span>
+        </div>
+        
         <div className="game-controls">
           <span className="player-count">
             {room.players.length}/{room.maxPlayers} players
@@ -208,6 +247,18 @@ const GamePage = () => {
           border-radius: 10px;
           margin-bottom: 20px;
           box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        
+        .player-info {
+          display: flex;
+          align-items: center;
+          gap: 15px;
+        }
+        
+        .player-info span {
+          font-weight: 500;
+          font-size: 16px;
+          color: #333;
         }
         
         .room-info h1 {

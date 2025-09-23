@@ -1,21 +1,28 @@
 import { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 
-// Generate a unique browser session ID
-const getBrowserSessionId = () => {
-  let sessionId = sessionStorage.getItem('browserSessionId');
-  if (!sessionId) {
-    sessionId = 'browser_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-    sessionStorage.setItem('browserSessionId', sessionId);
+// Generate a unique window session ID (allows multiple windows, one active tab per window)
+const getWindowSessionId = () => {
+  let windowId = sessionStorage.getItem('windowId');
+  if (!windowId) {
+    windowId = 'window_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    sessionStorage.setItem('windowId', windowId);
   }
-  return sessionId;
+  
+  let tabId = sessionStorage.getItem('tabId');
+  if (!tabId) {
+    tabId = 'tab_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    sessionStorage.setItem('tabId', tabId);
+  }
+  
+  return `${windowId}_${tabId}`;
 };
 
-const BROWSER_SESSION_ID = getBrowserSessionId();
+const WINDOW_SESSION_ID = getWindowSessionId();
 
-// Create socket with browser session ID
+// Create socket with window session ID
 const createSocket = () => {
-  console.log('🔌 Creating socket for browser session:', BROWSER_SESSION_ID);
+  console.log('🔌 Creating socket for window session:', WINDOW_SESSION_ID);
   
   const socket = io('http://localhost:3001', {
     transports: ['websocket'],
@@ -23,12 +30,12 @@ const createSocket = () => {
     rememberUpgrade: true,
     autoConnect: true,
     query: {
-      browserSessionId: BROWSER_SESSION_ID
+      browserSessionId: WINDOW_SESSION_ID
     }
   });
 
   socket.on('connect', () => {
-    console.log('🟢 Socket connected:', socket.id, 'Browser Session:', BROWSER_SESSION_ID);
+    console.log('🟢 Socket connected:', socket.id, 'Window Session:', WINDOW_SESSION_ID);
   });
 
   socket.on('disconnect', (reason) => {
@@ -129,7 +136,8 @@ const useSocket = () => {
         console.warn('Error disconnecting socket:', error);
       }
       globalSocket = null;
-      sessionStorage.removeItem('browserSessionId');
+      sessionStorage.removeItem('windowId');
+      sessionStorage.removeItem('tabId');
       setIsConnected(false);
     }
   };
@@ -143,7 +151,7 @@ const useSocket = () => {
     off,
     reconnect,
     disconnect,
-    browserSessionId: BROWSER_SESSION_ID
+    windowSessionId: WINDOW_SESSION_ID
   };
 };
 
