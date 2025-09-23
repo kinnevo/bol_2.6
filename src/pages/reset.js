@@ -37,33 +37,50 @@ const ResetPage = () => {
   };
 
   const handleFullReset = async () => {
+    const confirmReset = window.confirm(
+      '⚠️ FULL RESET WARNING ⚠️\n\n' +
+      'This will:\n' +
+      '• Disconnect ALL connected clients\n' +
+      '• Clear ALL rooms and players on server\n' +
+      '• Clear ALL browser data (localStorage, sessionStorage)\n' +
+      '• Force refresh to login page\n\n' +
+      'Are you sure you want to continue?'
+    );
+    
+    if (!confirmReset) {
+      return;
+    }
+    
     setIsResetting(true);
+    setMessage('🔄 Initiating full reset...');
     
-    // Clear browser session
-    clearBrowserSession();
-    
-    // Clear all localStorage
-    localStorage.clear();
-    sessionStorage.clear();
-    
-    // Reset server
     try {
-      await fetch('http://localhost:3001/admin/reset', {
+      // Reset server first - this will disconnect all clients
+      const response = await fetch('http://localhost:3001/admin/reset', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         }
       });
-      setMessage('✅ Full reset completed! Browser and server cleared.');
+      
+      if (response.ok) {
+        setMessage('✅ Server reset initiated. Disconnecting all clients...');
+        
+        // Clear all browser data
+        localStorage.clear();
+        sessionStorage.clear();
+        
+        // Give server time to disconnect clients, then redirect
+        setTimeout(() => {
+          window.location.href = '/?reset=true';
+        }, 2000);
+      } else {
+        throw new Error('Server reset failed');
+      }
     } catch (error) {
-      setMessage('✅ Browser cleared. Server reset failed: ' + error.message);
+      setMessage('❌ Full reset failed: ' + error.message);
+      setIsResetting(false);
     }
-    
-    setIsResetting(false);
-    
-    setTimeout(() => {
-      window.location.href = '/';
-    }, 2000);
   };
 
   const handleClearAllStorage = () => {
@@ -80,7 +97,17 @@ const ResetPage = () => {
       const response = await fetch('http://localhost:3001/admin/stats');
       if (response.ok) {
         const stats = await response.json();
-        setMessage(`📊 Server Stats: ${stats.rooms} rooms, ${stats.players} players, ${stats.connectedClients} connected clients, uptime: ${Math.floor(stats.uptime)}s`);
+        const memUsage = `${Math.round(stats.memoryUsage.rss / 1024 / 1024)}MB`;
+        setMessage(
+          `📊 Server Stats:\n` +
+          `• Rooms: ${stats.rooms}\n` +
+          `• Players: ${stats.players}\n` +
+          `• Connected Clients: ${stats.connectedClients}\n` +
+          `• Socket Connections: ${stats.connectedSockets}\n` +
+          `• Uptime: ${stats.uptime}s\n` +
+          `• Memory: ${memUsage}\n` +
+          `• Session ID: ${stats.serverSessionId.slice(-8)}`
+        );
       } else {
         setMessage('❌ Failed to get server stats.');
       }
@@ -255,9 +282,12 @@ const ResetPage = () => {
           padding: 15px;
           border-radius: 8px;
           margin-bottom: 20px;
-          text-align: center;
+          text-align: left;
           font-weight: 500;
           word-break: break-word;
+          white-space: pre-line;
+          font-family: monospace;
+          font-size: 14px;
         }
         
         .message.success {

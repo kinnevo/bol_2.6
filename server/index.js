@@ -33,30 +33,48 @@ app.get('/debug/rooms', (req, res) => {
 app.post('/admin/reset', (req, res) => {
   console.log('🔄 Server reset requested');
   
-  // Clear all rooms and players
-  rooms.clear();
-  players.clear();
+  // First, notify all clients about the reset
+  io.emit('server-reset', { message: 'Server is resetting. You will be redirected to login.' });
   
-  // Broadcast reset to all connected clients
-  io.emit('server-reset', { message: 'Server has been reset' });
-  
-  console.log('✅ Server reset completed - all rooms and players cleared');
+  // Give clients a moment to receive the message, then disconnect them
+  setTimeout(() => {
+    // Disconnect all clients
+    io.sockets.sockets.forEach((socket) => {
+      console.log('🔌 Disconnecting client:', socket.id);
+      socket.disconnect(true);
+    });
+    
+    // Clear all server data
+    rooms.clear();
+    players.clear();
+    
+    // Clear all socket rooms
+    io.sockets.adapter.rooms.clear();
+    
+    console.log('✅ Server reset completed - all clients disconnected, all data cleared');
+  }, 1000); // 1 second delay to allow message delivery
   
   res.json({
     success: true,
-    message: 'Server reset successfully',
+    message: 'Server reset initiated - all clients will be disconnected',
     timestamp: new Date().toISOString()
   });
 });
 
 // Admin endpoint to get server stats
 app.get('/admin/stats', (req, res) => {
+  const connectedSockets = Array.from(io.sockets.sockets.keys());
+  
   res.json({
     rooms: rooms.size,
     players: players.size,
     connectedClients: io.engine.clientsCount,
-    uptime: process.uptime(),
-    serverSessionId: serverSessionId
+    connectedSockets: connectedSockets.length,
+    socketIds: connectedSockets,
+    uptime: Math.floor(process.uptime()),
+    serverSessionId: serverSessionId,
+    memoryUsage: process.memoryUsage(),
+    timestamp: new Date().toISOString()
   });
 });
 

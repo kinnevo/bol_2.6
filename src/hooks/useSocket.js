@@ -63,6 +63,24 @@ const createSocket = () => {
     localStorage.setItem('serverSessionId', data.sessionId);
   });
 
+  // Handle server reset
+  socket.on('server-reset', (data) => {
+    console.log('🔄 Server reset detected:', data.message);
+    
+    // Clear all local storage and session storage
+    localStorage.clear();
+    sessionStorage.clear();
+    
+    // Disconnect the socket
+    socket.disconnect();
+    window.appSocket = null;
+    
+    // Redirect to login with reset message
+    setTimeout(() => {
+      window.location.href = '/?reset=true';
+    }, 500);
+  });
+
   return socket;
 };
 
