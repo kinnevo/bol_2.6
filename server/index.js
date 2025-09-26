@@ -930,32 +930,115 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Handle explicit room leaving
+  socket.on('leave-room', (roomId) => {
+    console.log(`🚪 Player ${socket.id} explicitly leaving room: ${roomId}`);
+    
+    const player = players.get(socket.id);
+    if (!player) {
+      console.log(`❌ Player ${socket.id} not found in players map`);
+      return;
+    }
+
+    const room = rooms.get(roomId || player.room);
+    if (!room) {
+      console.log(`❌ Room ${roomId || player.room} not found`);
+      return;
+    }
+
+    // Remove player from room
+    room.players = room.players.filter(id => id !== socket.id);
+    socket.leave(room.id);
+    
+    // Update player's room status (return to lobby)
+    player.room = null;
+    
+    console.log(`✅ Player ${player.name} left room ${room.name}. Remaining players: ${room.players.length}`);
+    
+    // Notify other players in the room about the departure
+    if (room.players.length > 0) {
+      io.to(room.id).emit('player-left-room', {
+        playerId: socket.id,
+        playerName: player.name,
+        room: {
+          ...room,
+          playerNames: room.players.map(playerId => {
+            const p = players.get(playerId);
+            return { id: playerId, name: p ? p.name : 'Unknown' };
+          })
+        }
+      });
+    }
+    
+    // If room is now empty, delete it
+    if (room.players.length === 0) {
+      console.log(`🗑️ Deleting empty room: ${room.id} "${room.name}" is now available again`);
+      rooms.delete(room.id);
+    }
+    
+    // Broadcast updated room and player lists
+    io.emit('room-list-updated', Array.from(rooms.values()));
+    io.emit('player-list-updated', Array.from(players.values()));
+    
+    // Confirm to the leaving player
+    socket.emit('room-left', { 
+      success: true, 
+      message: `Successfully left room "${room.name}"`,
+      roomId: room.id 
+    });
+  });
+
   // Handle disconnect
   socket.on('disconnect', () => {
     console.log('Client disconnected:', socket.id);
     
     const player = players.get(socket.id);
-    if (player && player.room) {
-      const room = rooms.get(player.room);
-      if (room) {
-        room.players = room.players.filter(id => id !== socket.id);
-        
-        if (room.players.length === 0) {
-          console.log('🗑️ Deleting empty room:', player.room, `"${room.name}" is now available again`);
-          rooms.delete(player.room);
+    if (player) {
+      console.log(`🔌 Player ${player.name} (${socket.id.slice(-4)}) disconnected`);
+      
+      if (player.room) {
+        const room = rooms.get(player.room);
+        if (room) {
+          // Remove player from room
+          room.players = room.players.filter(id => id !== socket.id);
+          console.log(`📤 Removed ${player.name} from room "${room.name}". Remaining players: ${room.players.length}`);
+          
+          // Notify other players in the room about the disconnection
+          if (room.players.length > 0) {
+            io.to(player.room).emit('player-left-room', {
+              playerId: socket.id,
+              playerName: player.name,
+              room: {
+                ...room,
+                playerNames: room.players.map(playerId => {
+                  const p = players.get(playerId);
+                  return { id: playerId, name: p ? p.name : 'Unknown' };
+                })
+              },
+              reason: 'disconnected'
+            });
+          }
+          
+          // If room is now empty, delete it
+          if (room.players.length === 0) {
+            console.log(`🗑️ Deleting empty room: ${player.room} "${room.name}" is now available again`);
+            rooms.delete(player.room);
+          }
+          
+          // Broadcast updated room list
+          io.emit('room-list-updated', Array.from(rooms.values()));
         }
-        
-        io.to(player.room).emit('player-left-room', {
-          playerId: socket.id,
-          room: room
-        });
-        
-        io.emit('room-list-updated', Array.from(rooms.values()));
       }
+      
+      // Remove player from players map
+      players.delete(socket.id);
+      console.log(`👥 Total players remaining: ${players.size}`);
+      
+      // Broadcast updated player list
+      io.emit('player-list-updated', Array.from(players.values()));
+    } else {
+      console.log(`⚠️ Disconnected client ${socket.id} was not found in players map`);
     }
-    
-    players.delete(socket.id);
-    io.emit('player-list-updated', Array.from(players.values()));
   });
 });
 

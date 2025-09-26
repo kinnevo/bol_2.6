@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import useSocket from '../hooks/useSocket';
 import GameRoom from '../components/GameRoom';
 import { checkBrowserSession, setupLogoutListener, clearBrowserSession } from '../utils/browserSession';
+import jsPDF from 'jspdf';
 
 // Conversation Game Component
 const ConversationGame = ({ room, gameState, playerName, socket, onGameAction }) => {
@@ -138,6 +139,120 @@ const ConversationGame = ({ room, gameState, playerName, socket, onGameAction })
   const handleCloseGroupSummary = () => {
     setShowGroupSummary(false);
     setGroupSummaryData(null);
+  };
+
+  const handleGeneratePDF = () => {
+    if (!groupSummaryData) return;
+
+    try {
+      const doc = new jsPDF();
+      
+      // Set up document properties
+      doc.setProperties({
+        title: 'Group Analysis Summary',
+        subject: 'Conversation Game Results',
+        author: 'Conversation Game',
+        creator: 'Conversation Game App'
+      });
+
+      // Add header
+      doc.setFontSize(20);
+      doc.setTextColor(40, 40, 40);
+      doc.text('🎯 Group Analysis Summary', 20, 30);
+      
+      // Add metadata
+      doc.setFontSize(12);
+      doc.setTextColor(100, 100, 100);
+      const dateStr = new Date(groupSummaryData.timestamp).toLocaleString();
+      doc.text(`${groupSummaryData.participantCount} participants • ${dateStr}`, 20, 40);
+      
+      // Add a line separator
+      doc.setDrawColor(100, 100, 100);
+      doc.line(20, 45, 190, 45);
+      
+      // Process the markdown content to plain text
+      let yPosition = 55;
+      const pageHeight = doc.internal.pageSize.height;
+      const maxWidth = 170;
+      
+      // Split content by lines and process
+      const lines = groupSummaryData.text.split('\n');
+      
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        
+        if (!line) {
+          yPosition += 5; // Add space for empty lines
+          continue;
+        }
+        
+        // Handle headers
+        if (line.startsWith('# ')) {
+          doc.setFontSize(16);
+          doc.setTextColor(40, 40, 40);
+          const headerText = line.substring(2);
+          const splitHeader = doc.splitTextToSize(headerText, maxWidth);
+          doc.text(splitHeader, 20, yPosition);
+          yPosition += splitHeader.length * 8 + 5;
+        } else if (line.startsWith('## ')) {
+          doc.setFontSize(14);
+          doc.setTextColor(60, 60, 60);
+          const headerText = line.substring(3);
+          const splitHeader = doc.splitTextToSize(headerText, maxWidth);
+          doc.text(splitHeader, 20, yPosition);
+          yPosition += splitHeader.length * 7 + 3;
+        } else if (line.startsWith('### ')) {
+          doc.setFontSize(12);
+          doc.setTextColor(80, 80, 80);
+          const headerText = line.substring(4);
+          const splitHeader = doc.splitTextToSize(headerText, maxWidth);
+          doc.text(splitHeader, 20, yPosition);
+          yPosition += splitHeader.length * 6 + 2;
+        } else {
+          // Regular text
+          doc.setFontSize(11);
+          doc.setTextColor(40, 40, 40);
+          
+          // Remove markdown formatting
+          let cleanText = line
+            .replace(/\*\*(.*?)\*\*/g, '$1') // Remove bold
+            .replace(/\*(.*?)\*/g, '$1')     // Remove italic
+            .replace(/`(.*?)`/g, '$1')       // Remove code
+            .replace(/^\- /, '• ')           // Convert list items
+            .replace(/^\d+\. /, '• ');       // Convert numbered lists to bullets
+          
+          const splitText = doc.splitTextToSize(cleanText, maxWidth);
+          
+          // Check if we need a new page
+          if (yPosition + (splitText.length * 5) > pageHeight - 20) {
+            doc.addPage();
+            yPosition = 20;
+          }
+          
+          doc.text(splitText, 20, yPosition);
+          yPosition += splitText.length * 5 + 2;
+        }
+        
+        // Check if we need a new page
+        if (yPosition > pageHeight - 20) {
+          doc.addPage();
+          yPosition = 20;
+        }
+      }
+      
+      // Generate filename with timestamp
+      const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+      const filename = `Group_Summary_${room.name}_${timestamp}.pdf`;
+      
+      // Save the PDF
+      doc.save(filename);
+      
+      console.log('PDF generated successfully:', filename);
+      
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+      alert('Error generating PDF. Please try again.');
+    }
   };
 
   const currentPlayer = room.playerNames?.find(p => p.name === playerName);
@@ -331,6 +446,9 @@ const ConversationGame = ({ room, gameState, playerName, socket, onGameAction })
               <ReactMarkdown>{groupSummaryData.text}</ReactMarkdown>
             </div>
             <div className="popup-footer">
+              <button className="pdf-button" onClick={handleGeneratePDF}>
+                📄 Generate PDF
+              </button>
               <button className="close-button" onClick={handleCloseGroupSummary}>
                 Close
               </button>
@@ -1110,6 +1228,27 @@ const ConversationGame = ({ room, gameState, playerName, socket, onGameAction })
           border-radius: 0 0 16px 16px;
           display: flex;
           justify-content: flex-start;
+          gap: 15px;
+        }
+
+        .pdf-button {
+          background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+          color: white;
+          border: none;
+          padding: 12px 24px;
+          border-radius: 8px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.3s ease;
+          font-size: 14px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .pdf-button:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 4px 12px rgba(52, 152, 219, 0.3);
         }
 
         .close-button {
@@ -1267,9 +1406,34 @@ const GamePage = () => {
   };
 
   const handleLeaveRoom = () => {
-    // Clear room info from localStorage
-    localStorage.removeItem('currentRoom');
-    navigate('/lobby');
+    if (socket && room) {
+      // Emit leave-room event to server
+      socket.emit('leave-room', room.id);
+      
+      // Listen for confirmation
+      const handleRoomLeft = (data) => {
+        console.log('Successfully left room:', data);
+        // Clear room info from localStorage
+        localStorage.removeItem('currentRoom');
+        // Navigate to lobby
+        navigate('/lobby');
+        // Clean up listener
+        socket.off('room-left', handleRoomLeft);
+      };
+      
+      socket.on('room-left', handleRoomLeft);
+      
+      // Fallback: navigate after timeout if no response
+      setTimeout(() => {
+        socket.off('room-left', handleRoomLeft);
+        localStorage.removeItem('currentRoom');
+        navigate('/lobby');
+      }, 3000);
+    } else {
+      // Fallback if no socket connection
+      localStorage.removeItem('currentRoom');
+      navigate('/lobby');
+    }
   };
 
   const handleGameAction = (action, data) => {
