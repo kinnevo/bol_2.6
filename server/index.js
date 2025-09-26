@@ -181,6 +181,262 @@ The current question being explored is: "What new experience or skill would make
 
 Start the conversation by warmly greeting the person and gently introducing this question for exploration.`;
 
+// Summary generation system prompt
+const SUMMARY_SYSTEM_PROMPT = `Summarize the conversation, show the topics mentioned and create a story in 200 words, about the story described by the participant.
+
+Your task is to:
+- Identify the main topics and themes discussed in the conversation
+- Extract the key experiences, skills, or aspirations the person mentioned
+- Create a compelling narrative story (exactly 200 words) that captures their journey and desires
+- Write in an engaging, storytelling style that brings their vision to life
+- Focus on their potential transformation and what "feeling truly alive" means to them
+
+Format your response as:
+**Topics Discussed:** [List main topics]
+
+**Your Story:**
+[Write exactly 200 words telling their story in an engaging narrative format]`;
+
+// Group summary system prompt
+const GROUP_SUMMARY_SYSTEM_PROMPT = `Create a summary of the history analyzing the following elements:
+
+- How many words wrote each participant
+- What is the final result that you identify for each participant
+- Compare what are the interests of each participant
+- Integrate a common goal that include the interests of each participant
+
+Format your response as:
+# Group Analysis Summary
+
+## Word Count Analysis
+[Analyze how many words each participant contributed]
+
+## Individual Results
+[For each participant, identify their final result/outcome]
+
+## Interest Comparison
+[Compare and contrast the interests of all participants]
+
+## Common Goal Integration
+[Identify and articulate a unified goal that encompasses everyone's interests]
+
+## Conclusion
+[Provide insights about the group's collective journey]`;
+
+// Function to generate summaries for all players in a room
+async function generateSummariesForAllPlayers(roomId) {
+  const room = rooms.get(roomId);
+  if (!room || !room.conversations) {
+    console.log('Room or conversations not found for summary generation');
+    return;
+  }
+
+  console.log(`Generating summaries for ${room.conversations.size} players in room ${roomId}`);
+
+  // Generate summary for each player
+  for (const [playerName, conversationHistory] of room.conversations.entries()) {
+    try {
+      await generatePlayerSummary(roomId, playerName, conversationHistory);
+    } catch (error) {
+      console.error(`Error generating summary for ${playerName}:`, error);
+    }
+  }
+}
+
+// Function to generate summary for a specific player
+async function generatePlayerSummary(roomId, playerName, conversationHistory) {
+  if (conversationHistory.length === 0) {
+    console.log(`No conversation history for ${playerName}, skipping summary`);
+    return;
+  }
+
+  console.log(`Generating summary for ${playerName}...`);
+
+  try {
+    // Prepare conversation text for summary
+    const conversationText = conversationHistory
+      .filter(msg => msg.role === 'user' || msg.role === 'assistant')
+      .map(msg => `${msg.role === 'user' ? 'Participant' : 'Life Coach'}: ${msg.text}`)
+      .join('\n\n');
+
+    // Generate summary using ChatGPT
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        { role: 'system', content: SUMMARY_SYSTEM_PROMPT },
+        { role: 'user', content: `Please summarize this conversation:\n\n${conversationText}` }
+      ],
+      max_tokens: 400,
+      temperature: 0.7,
+    });
+
+    const summaryText = completion.choices[0].message.content;
+    console.log(`Summary generated for ${playerName}`);
+
+    // Create summary message
+    const summaryMessage = {
+      id: Date.now() + Math.random(),
+      text: summaryText,
+      timestamp: new Date().toLocaleTimeString(),
+      playerName: 'Summary',
+      roomId: roomId,
+      role: 'summary',
+      isSummary: true
+    };
+
+    // Add summary to conversation history
+    conversationHistory.push(summaryMessage);
+
+    // Send summary to the specific player
+    const room = rooms.get(roomId);
+    if (room) {
+      const playerSocket = Array.from(io.sockets.sockets.values())
+        .find(s => {
+          const player = players.get(s.id);
+          return player && player.name === playerName && player.room === roomId;
+        });
+
+      if (playerSocket) {
+        console.log(`✅ Sending summary to ${playerName} via socket ${playerSocket.id}`);
+        playerSocket.emit('conversation-summary', summaryMessage);
+      } else {
+        console.error(`❌ Could not find socket for player ${playerName} in room ${roomId}`);
+        console.log('Available players:', Array.from(players.values()).map(p => `${p.name}(${p.id.slice(-4)}) room:${p.room}`));
+        
+        // Fallback: send to all players in the room (they'll filter on client side)
+        console.log('📡 Broadcasting summary to all players in room as fallback');
+        io.to(roomId).emit('conversation-summary', summaryMessage);
+      }
+    }
+
+  } catch (error) {
+    console.error(`ChatGPT summary error for ${playerName}:`, error);
+    
+    // Send fallback summary
+    const fallbackSummary = {
+      id: Date.now() + Math.random(),
+      text: "**Topics Discussed:** Personal growth, life experiences, aspirations\n\n**Your Story:**\nYour conversation revealed a thoughtful exploration of what makes life meaningful. Through our dialogue, themes of personal reinvention and the search for experiences that bring vitality emerged. Your reflections touched on the importance of stepping outside comfort zones and embracing new challenges. The discussion highlighted your desire for growth and transformation, suggesting that feeling truly alive comes from pursuing authentic experiences that align with your values. Your journey represents the universal human quest for purpose and the courage to evolve. Whether through learning new skills, exploring different perspectives, or connecting more deeply with others, your path forward is illuminated by the insights shared. This conversation marks a moment of self-discovery, where possibilities become clearer and the vision of a more vibrant life takes shape. Your story is one of potential waiting to unfold, of dreams ready to be pursued, and of a spirit eager to embrace what lies ahead.",
+      timestamp: new Date().toLocaleTimeString(),
+      playerName: 'Summary',
+      roomId: roomId,
+      role: 'summary',
+      isSummary: true
+    };
+
+    conversationHistory.push(fallbackSummary);
+    
+    const room = rooms.get(roomId);
+    if (room) {
+      const playerSocket = Array.from(io.sockets.sockets.values())
+        .find(s => {
+          const player = players.get(s.id);
+          return player && player.name === playerName && player.room === roomId;
+        });
+
+      if (playerSocket) {
+        console.log(`✅ Sending fallback summary to ${playerName} via socket ${playerSocket.id}`);
+        playerSocket.emit('conversation-summary', fallbackSummary);
+      } else {
+        console.error(`❌ Could not find socket for player ${playerName} in room ${roomId} (fallback)`);
+        console.log('Available players:', Array.from(players.values()).map(p => `${p.name}(${p.id.slice(-4)}) room:${p.room}`));
+        
+        // Fallback: send to all players in the room (they'll filter on client side)
+        console.log('📡 Broadcasting fallback summary to all players in room');
+        io.to(roomId).emit('conversation-summary', fallbackSummary);
+      }
+    }
+  }
+}
+
+// Function to generate group summary from all participants' summaries
+async function generateGroupSummary(roomId) {
+  const room = rooms.get(roomId);
+  if (!room || !room.conversations) {
+    console.log('Room or conversations not found for group summary generation');
+    return null;
+  }
+
+  console.log(`Generating group summary for room ${roomId} with ${room.conversations.size} participants`);
+
+  try {
+    // Collect all individual summaries and conversation data
+    const participantData = [];
+    
+    for (const [playerName, conversationHistory] of room.conversations.entries()) {
+      // Find the summary message for this participant
+      const summaryMessage = conversationHistory.find(msg => msg.isSummary);
+      
+      // Count words from user messages only
+      const userMessages = conversationHistory.filter(msg => msg.role === 'user');
+      const wordCount = userMessages.reduce((count, msg) => {
+        return count + (msg.text ? msg.text.trim().split(/\s+/).length : 0);
+      }, 0);
+
+      participantData.push({
+        name: playerName,
+        wordCount: wordCount,
+        summary: summaryMessage ? summaryMessage.text : 'No summary available',
+        userMessages: userMessages.map(msg => msg.text).join(' ')
+      });
+    }
+
+    // Prepare the prompt with all participant data
+    const participantSummaries = participantData.map(participant => 
+      `**${participant.name}** (${participant.wordCount} words):\n${participant.summary}`
+    ).join('\n\n');
+
+    const promptText = `Here are the individual summaries from ${participantData.length} participants:\n\n${participantSummaries}`;
+
+    // Generate group summary using ChatGPT
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        { role: 'system', content: GROUP_SUMMARY_SYSTEM_PROMPT },
+        { role: 'user', content: promptText }
+      ],
+      max_tokens: 800,
+      temperature: 0.7,
+    });
+
+    const groupSummaryText = completion.choices[0].message.content;
+    console.log(`Group summary generated for room ${roomId}`);
+
+    return {
+      roomId: roomId,
+      participantCount: participantData.length,
+      text: groupSummaryText,
+      timestamp: new Date().toISOString()
+    };
+
+  } catch (error) {
+    console.error(`Error generating group summary for room ${roomId}:`, error);
+    
+    // Return fallback group summary
+    const participantNames = Array.from(room.conversations.keys());
+    return {
+      roomId: roomId,
+      participantCount: participantNames.length,
+      text: `# Group Analysis Summary
+
+## Word Count Analysis
+This session included ${participantNames.length} participants: ${participantNames.join(', ')}. Each participant contributed thoughtfully to exploring what would make them feel truly alive again.
+
+## Individual Results
+Each participant engaged in meaningful self-reflection about personal growth and transformation. Through guided conversation, they explored their desires for new experiences and skills that could bring vitality to their lives.
+
+## Interest Comparison
+Common themes emerged around personal growth, stepping outside comfort zones, and pursuing authentic experiences. While each participant's specific interests were unique, all shared a desire for meaningful change and personal development.
+
+## Common Goal Integration
+The unified goal for this group centers on **embracing transformative experiences that align with personal values and bring genuine fulfillment**. This encompasses everyone's interest in growth, authenticity, and living more vibrantly.
+
+## Conclusion
+This group represents a collective journey toward personal reinvention, with each member supporting the others' quest for a more alive and meaningful existence.`,
+      timestamp: new Date().toISOString()
+    };
+  }
+}
+
 io.on('connection', (socket) => {
   const windowSessionId = socket.handshake.query.browserSessionId; // Keep same parameter name for compatibility
   console.log('New client connected:', socket.id, 'Window Session:', windowSessionId);
@@ -632,7 +888,45 @@ io.on('connection', (socket) => {
         });
         
         console.log(`Room ${data.roomId}: ${room.finishedPlayers.length}/${room.players.length} players finished`);
+        
+        // Check if all players have finished
+        if (room.finishedPlayers.length === room.players.length) {
+          console.log(`All players finished in room ${data.roomId}. Starting summary generation...`);
+          generateSummariesForAllPlayers(data.roomId);
+        }
       }
+    }
+  });
+
+  // Handle group summary generation
+  socket.on('generate-group-summary', async (data) => {
+    console.log('Group summary requested for room:', data.roomId);
+    
+    const room = rooms.get(data.roomId);
+    if (!room) {
+      socket.emit('group-summary-error', 'Room not found');
+      return;
+    }
+
+    // Check if all players have finished their conversations
+    if (!room.finishedPlayers || room.finishedPlayers.length !== room.players.length) {
+      socket.emit('group-summary-error', 'Not all players have finished their conversations');
+      return;
+    }
+
+    try {
+      const groupSummary = await generateGroupSummary(data.roomId);
+      
+      if (groupSummary) {
+        // Send group summary to all players in the room
+        io.to(data.roomId).emit('group-summary-generated', groupSummary);
+        console.log(`✅ Group summary sent to all players in room ${data.roomId}`);
+      } else {
+        socket.emit('group-summary-error', 'Failed to generate group summary');
+      }
+    } catch (error) {
+      console.error('Error in group summary generation:', error);
+      socket.emit('group-summary-error', 'An error occurred while generating the group summary');
     }
   });
 

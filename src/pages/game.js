@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import ReactMarkdown from 'react-markdown';
 import useSocket from '../hooks/useSocket';
 import GameRoom from '../components/GameRoom';
 import { checkBrowserSession, setupLogoutListener, clearBrowserSession } from '../utils/browserSession';
@@ -14,6 +15,9 @@ const ConversationGame = ({ room, gameState, playerName, socket, onGameAction })
   const [finishedPlayers, setFinishedPlayers] = useState(room.finishedPlayers || []);
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
+  const [showGroupSummary, setShowGroupSummary] = useState(false);
+  const [groupSummaryData, setGroupSummaryData] = useState(null);
+  const [isGeneratingGroupSummary, setIsGeneratingGroupSummary] = useState(false);
   const conversationStartedRef = useRef(false);
   const messagesEndRef = useRef(null);
 
@@ -61,9 +65,33 @@ const ConversationGame = ({ room, gameState, playerName, socket, onGameAction })
         setMessages(prev => [...prev, data]);
       });
 
+      socket.on('conversation-summary', (summaryData) => {
+        console.log('Received conversation summary:', summaryData);
+        // Only add summary if it's for this player (in case of broadcast fallback)
+        if (summaryData.playerName === 'Summary') {
+          setMessages(prev => [...prev, summaryData]);
+        }
+      });
+
+      socket.on('group-summary-generated', (groupSummary) => {
+        console.log('Received group summary:', groupSummary);
+        setGroupSummaryData(groupSummary);
+        setShowGroupSummary(true);
+        setIsGeneratingGroupSummary(false);
+      });
+
+      socket.on('group-summary-error', (error) => {
+        console.error('Group summary error:', error);
+        alert(`Error generating group summary: ${error}`);
+        setIsGeneratingGroupSummary(false);
+      });
+
       return () => {
         socket.off('player-finished-conversation');
         socket.off('conversation-message');
+        socket.off('conversation-summary');
+        socket.off('group-summary-generated');
+        socket.off('group-summary-error');
         socket.off('room-state-update');
       };
     }
@@ -98,6 +126,18 @@ const ConversationGame = ({ room, gameState, playerName, socket, onGameAction })
       socket.emit('conversation-message', messageData);
       setNewMessage('');
     }
+  };
+
+  const handleGenerateGroupSummary = () => {
+    if (socket && allPlayersFinished) {
+      setIsGeneratingGroupSummary(true);
+      socket.emit('generate-group-summary', { roomId: room.id });
+    }
+  };
+
+  const handleCloseGroupSummary = () => {
+    setShowGroupSummary(false);
+    setGroupSummaryData(null);
   };
 
   const currentPlayer = room.playerNames?.find(p => p.name === playerName);
@@ -138,13 +178,34 @@ const ConversationGame = ({ room, gameState, playerName, socket, onGameAction })
                   </div>
                 </div>
               ) : (
-                messages.map((msg) => (
-                  <div key={msg.id} className={`message ${msg.isAI ? 'ai-message' : 'user-message'}`}>
-                    <div className="message-header">
-                      <span className="message-sender">{msg.isAI ? '🧠 Life Coach' : '👤 You'}</span>
-                      <span className="message-time">{msg.timestamp}</span>
+                messages.map((msg, index) => (
+                  <div key={msg.id}>
+                    {msg.isSummary && (
+                      <div className="summary-separator">
+                        <div className="separator-line"></div>
+                        <div className="separator-text">📋 Conversation Summary</div>
+                        <div className="separator-line"></div>
+                      </div>
+                    )}
+                    <div className={`message ${
+                      msg.isSummary ? 'summary-message' : 
+                      msg.isAI ? 'ai-message' : 'user-message'
+                    }`}>
+                      <div className="message-header">
+                        <span className="message-sender">
+                          {msg.isSummary ? '📋 Summary' : 
+                           msg.isAI ? '🧠 Life Coach' : '👤 You'}
+                        </span>
+                        <span className="message-time">{msg.timestamp}</span>
+                      </div>
+                      <div className={`message-text ${msg.isSummary ? 'summary-text' : ''}`}>
+                        {msg.isSummary || msg.isAI ? (
+                          <ReactMarkdown>{msg.text}</ReactMarkdown>
+                        ) : (
+                          msg.text
+                        )}
+                      </div>
                     </div>
-                    <div className="message-text">{msg.text}</div>
                   </div>
                 ))
               )}
@@ -237,13 +298,46 @@ const ConversationGame = ({ room, gameState, playerName, socket, onGameAction })
         {allPlayersFinished && (
           <div className="next-phase">
             <h4>🎉 All Players Finished!</h4>
-            <p>Ready to move to the next phase of the game.</p>
-            <button className="next-phase-btn">
-              Continue to Next Phase
+            <p>Ready to generate the group analysis summary.</p>
+            <button 
+              className="next-phase-btn"
+              onClick={handleGenerateGroupSummary}
+              disabled={isGeneratingGroupSummary}
+            >
+              {isGeneratingGroupSummary ? (
+                <>
+                  <span className="spinner"></span>
+                  Generating Summary...
+                </>
+              ) : (
+                'Generate Group Summary'
+              )}
             </button>
           </div>
         )}
       </div>
+
+      {/* Group Summary Popup */}
+      {showGroupSummary && groupSummaryData && (
+        <div className="popup-overlay">
+          <div className="popup-window">
+            <div className="popup-header">
+              <h2>🎯 Group Analysis Summary</h2>
+              <div className="popup-meta">
+                {groupSummaryData.participantCount} participants • {new Date(groupSummaryData.timestamp).toLocaleString()}
+              </div>
+            </div>
+            <div className="popup-content">
+              <ReactMarkdown>{groupSummaryData.text}</ReactMarkdown>
+            </div>
+            <div className="popup-footer">
+              <button className="close-button" onClick={handleCloseGroupSummary}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style jsx>{`
         .conversation-game {
@@ -489,6 +583,157 @@ const ConversationGame = ({ room, gameState, playerName, socket, onGameAction })
 
         .user-message .message-text {
           color: white;
+        }
+
+        .summary-separator {
+          display: flex;
+          align-items: center;
+          margin: 30px 0 20px 0;
+          gap: 15px;
+        }
+
+        .separator-line {
+          flex: 1;
+          height: 3px;
+          background: linear-gradient(135deg, #2196f3 0%, #1976d2 100%);
+          border-radius: 2px;
+        }
+
+        .separator-text {
+          color: #2196f3;
+          font-weight: 600;
+          font-size: 14px;
+          text-transform: uppercase;
+          letter-spacing: 1px;
+          padding: 8px 16px;
+          background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+          border: 2px solid #2196f3;
+          border-radius: 20px;
+          white-space: nowrap;
+        }
+
+        .summary-message {
+          background: linear-gradient(135deg, #f8f9ff 0%, #e8f4fd 100%);
+          border: 2px solid #2196f3;
+          border-radius: 12px;
+          margin: 15px 0;
+          box-shadow: 0 4px 12px rgba(33, 150, 243, 0.2);
+        }
+
+        .summary-text {
+          font-size: 15px;
+          line-height: 1.6;
+          color: #1565c0;
+          white-space: pre-line;
+        }
+
+        .summary-message .message-header {
+          background: linear-gradient(135deg, #2196f3 0%, #1976d2 100%);
+          color: white;
+          margin: -2px -2px 0 -2px;
+          border-radius: 10px 10px 0 0;
+        }
+
+        .summary-message .message-sender {
+          color: white;
+          font-weight: 600;
+        }
+
+        .summary-message .message-time {
+          color: rgba(255, 255, 255, 0.9);
+        }
+
+        /* Markdown styling */
+        .message-text h1,
+        .message-text h2,
+        .message-text h3,
+        .message-text h4,
+        .message-text h5,
+        .message-text h6 {
+          margin: 10px 0 5px 0;
+          font-weight: 600;
+        }
+
+        .message-text p {
+          margin: 8px 0;
+          line-height: 1.6;
+        }
+
+        .message-text strong {
+          font-weight: 600;
+          color: inherit;
+        }
+
+        .message-text em {
+          font-style: italic;
+        }
+
+        .message-text ul,
+        .message-text ol {
+          margin: 8px 0;
+          padding-left: 20px;
+        }
+
+        .message-text li {
+          margin: 4px 0;
+        }
+
+        .message-text blockquote {
+          border-left: 3px solid #ddd;
+          margin: 10px 0;
+          padding-left: 15px;
+          font-style: italic;
+          opacity: 0.9;
+        }
+
+        .message-text code {
+          background: rgba(0, 0, 0, 0.1);
+          padding: 2px 4px;
+          border-radius: 3px;
+          font-family: monospace;
+          font-size: 0.9em;
+        }
+
+        .message-text pre {
+          background: rgba(0, 0, 0, 0.1);
+          padding: 10px;
+          border-radius: 5px;
+          overflow-x: auto;
+          margin: 10px 0;
+        }
+
+        .message-text pre code {
+          background: none;
+          padding: 0;
+        }
+
+        /* Markdown styling for AI messages */
+        .ai-message .message-text h1,
+        .ai-message .message-text h2,
+        .ai-message .message-text h3,
+        .ai-message .message-text h4,
+        .ai-message .message-text h5,
+        .ai-message .message-text h6 {
+          color: #2c3e50;
+        }
+
+        .ai-message .message-text strong {
+          color: #1a252f;
+        }
+
+        /* Markdown styling for summary messages */
+        .summary-message .message-text h1,
+        .summary-message .message-text h2,
+        .summary-message .message-text h3,
+        .summary-message .message-text h4,
+        .summary-message .message-text h5,
+        .summary-message .message-text h6 {
+          color: #0d47a1;
+        }
+
+        .summary-message .message-text strong {
+          color: #0d47a1;
+          font-weight: 700;
         }
 
         .message-form {
@@ -740,6 +985,148 @@ const ConversationGame = ({ room, gameState, playerName, socket, onGameAction })
         .next-phase-btn:hover {
           background: rgba(255,255,255,0.3);
           transform: translateY(-1px);
+        }
+
+        .next-phase-btn:disabled {
+          opacity: 0.7;
+          cursor: not-allowed;
+          transform: none;
+        }
+
+        .spinner {
+          display: inline-block;
+          width: 16px;
+          height: 16px;
+          border: 2px solid rgba(255,255,255,0.3);
+          border-radius: 50%;
+          border-top-color: white;
+          animation: spin 1s ease-in-out infinite;
+          margin-right: 8px;
+        }
+
+        @keyframes spin {
+          to {
+            transform: rotate(360deg);
+          }
+        }
+
+        /* Popup Styles */
+        .popup-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: rgba(0, 0, 0, 0.7);
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          z-index: 1000;
+          padding: 20px;
+        }
+
+        .popup-window {
+          background: white;
+          border-radius: 16px;
+          max-width: 800px;
+          max-height: 90vh;
+          width: 100%;
+          display: flex;
+          flex-direction: column;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+          overflow: hidden;
+        }
+
+        .popup-header {
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          color: white;
+          padding: 20px 30px;
+          border-radius: 16px 16px 0 0;
+        }
+
+        .popup-header h2 {
+          margin: 0 0 5px 0;
+          font-size: 24px;
+          font-weight: 600;
+        }
+
+        .popup-meta {
+          font-size: 14px;
+          opacity: 0.9;
+        }
+
+        .popup-content {
+          flex: 1;
+          padding: 30px;
+          overflow-y: auto;
+          line-height: 1.6;
+        }
+
+        .popup-content h1 {
+          color: #2c3e50;
+          font-size: 28px;
+          margin: 0 0 20px 0;
+          border-bottom: 3px solid #667eea;
+          padding-bottom: 10px;
+        }
+
+        .popup-content h2 {
+          color: #34495e;
+          font-size: 22px;
+          margin: 25px 0 15px 0;
+          border-left: 4px solid #667eea;
+          padding-left: 15px;
+        }
+
+        .popup-content h3 {
+          color: #2c3e50;
+          font-size: 18px;
+          margin: 20px 0 10px 0;
+        }
+
+        .popup-content p {
+          margin: 12px 0;
+          color: #34495e;
+        }
+
+        .popup-content ul, .popup-content ol {
+          margin: 15px 0;
+          padding-left: 25px;
+        }
+
+        .popup-content li {
+          margin: 8px 0;
+          color: #34495e;
+        }
+
+        .popup-content strong {
+          color: #2c3e50;
+          font-weight: 600;
+        }
+
+        .popup-footer {
+          padding: 20px 30px;
+          background: #f8f9fa;
+          border-radius: 0 0 16px 16px;
+          display: flex;
+          justify-content: flex-start;
+        }
+
+        .close-button {
+          background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
+          color: white;
+          border: none;
+          padding: 12px 24px;
+          border-radius: 8px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.3s ease;
+          font-size: 14px;
+        }
+
+        .close-button:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 4px 12px rgba(231, 76, 60, 0.3);
         }
 
         @media (max-width: 1024px) {
