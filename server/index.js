@@ -2,6 +2,8 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
+require('dotenv').config();
+const OpenAI = require('openai');
 
 const app = express();
 const server = http.createServer(app);
@@ -158,6 +160,26 @@ const players = new Map();
 
 // Server session ID to detect restarts
 const serverSessionId = Date.now().toString();
+
+// Initialize OpenAI
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+// ChatGPT conversation system prompt
+const CONVERSATION_SYSTEM_PROMPT = `You are a wise, empathetic life coach specializing in personal reinvention and transformation. You help people explore deep questions about their lives with thoughtful, probing questions and gentle guidance.
+
+Your role is to:
+- Ask thoughtful follow-up questions that help the person explore their feelings and motivations
+- Provide gentle insights and reflections
+- Help them discover their own answers rather than giving direct advice
+- Be supportive and non-judgmental
+- Keep responses concise but meaningful (2-3 sentences max)
+- Focus on the person's inner wisdom and potential
+
+The current question being explored is: "What new experience or skill would make you feel truly alive again?"
+
+Start the conversation by warmly greeting the person and gently introducing this question for exploration.`;
 
 io.on('connection', (socket) => {
   const windowSessionId = socket.handshake.query.browserSessionId; // Keep same parameter name for compatibility
@@ -332,13 +354,14 @@ io.on('connection', (socket) => {
     if (room.players.includes(socket.id)) {
       console.log('Player already in room:', socket.id);
       
-      // Create room data with player names
+      // Create room data with player names and finished players
       const roomWithPlayerNames = {
         ...room,
         playerNames: room.players.map(playerId => {
           const p = players.get(playerId);
           return { id: playerId, name: p ? p.name : 'Unknown' };
-        })
+        }),
+        finishedPlayers: room.finishedPlayers || []
       };
       
       socket.emit('room-joined', roomWithPlayerNames);
@@ -370,13 +393,14 @@ io.on('connection', (socket) => {
     
     console.log('Player joined room successfully:', socket.id, 'Room:', roomId, 'New player count:', room.players.length);
     
-    // Create room data with player names
+    // Create room data with player names and finished players
     const roomWithPlayerNames = {
       ...room,
       playerNames: room.players.map(playerId => {
         const p = players.get(playerId);
         return { id: playerId, name: p ? p.name : 'Unknown' };
-      })
+      }),
+      finishedPlayers: room.finishedPlayers || []
     };
     
     // Notify the player they joined successfully
@@ -400,7 +424,215 @@ io.on('connection', (socket) => {
     const room = rooms.get(roomId);
     if (room && room.players.includes(socket.id)) {
       room.status = 'playing';
+      room.conversations = new Map(); // Track individual conversations
+      room.finishedPlayers = []; // Track who has finished their conversation
       io.to(roomId).emit('game-started', room);
+    }
+  });
+
+  // Handle conversation messages (private to each player)
+  socket.on('conversation-message', async (data) => {
+    console.log('Conversation message from:', data.playerName, ':', data.text);
+    
+    const room = rooms.get(data.roomId);
+    if (!room) return;
+    
+    // Initialize conversation history if needed
+    if (!room.conversations) {
+      room.conversations = new Map();
+    }
+    if (!room.conversations.has(data.playerName)) {
+      room.conversations.set(data.playerName, []);
+    }
+    
+    const conversationHistory = room.conversations.get(data.playerName);
+    
+    // Add user message to history
+    const userMessage = {
+      ...data,
+      role: 'user',
+      timestamp: new Date().toISOString()
+    };
+    conversationHistory.push(userMessage);
+    
+    // Send user message back to client immediately
+    socket.emit('conversation-message', userMessage);
+    
+    try {
+      // Prepare messages for ChatGPT
+      const messages = [
+        { role: 'system', content: CONVERSATION_SYSTEM_PROMPT }
+      ];
+      
+      // Add conversation history
+      conversationHistory.forEach(msg => {
+        if (msg.role === 'user') {
+          messages.push({ role: 'user', content: msg.text });
+        } else if (msg.role === 'assistant') {
+          messages.push({ role: 'assistant', content: msg.text });
+        }
+      });
+      
+      console.log(`Sending to ChatGPT for ${data.playerName}:`, messages.length, 'messages');
+      
+      // Get ChatGPT response
+      const completion = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: messages,
+        max_tokens: 150,
+        temperature: 0.7,
+      });
+      
+      const aiResponse = completion.choices[0].message.content;
+      console.log(`ChatGPT response for ${data.playerName}:`, aiResponse);
+      
+      // Create AI message
+      const aiMessage = {
+        id: Date.now() + 1,
+        text: aiResponse,
+        timestamp: new Date().toLocaleTimeString(),
+        playerName: 'Life Coach',
+        roomId: data.roomId,
+        role: 'assistant',
+        isAI: true
+      };
+      
+      // Add AI response to history
+      conversationHistory.push(aiMessage);
+      
+      // Send AI response to client
+      setTimeout(() => {
+        socket.emit('conversation-message', aiMessage);
+      }, 1000); // Small delay to make it feel more natural
+      
+    } catch (error) {
+      console.error('ChatGPT API error:', error);
+      
+      // Send fallback message
+      const fallbackMessage = {
+        id: Date.now() + 1,
+        text: "I'm here to listen and explore this question with you. What thoughts or feelings come up when you think about what might make you feel truly alive?",
+        timestamp: new Date().toLocaleTimeString(),
+        playerName: 'Life Coach',
+        roomId: data.roomId,
+        role: 'assistant',
+        isAI: true
+      };
+      
+      conversationHistory.push(fallbackMessage);
+      socket.emit('conversation-message', fallbackMessage);
+    }
+  });
+
+  // Handle starting a conversation (auto-triggered)
+  socket.on('start-conversation', async (data) => {
+    console.log('Starting conversation for:', data.playerName);
+    
+    const room = rooms.get(data.roomId);
+    if (!room) return;
+    
+    // Initialize conversation if needed
+    if (!room.conversations) {
+      room.conversations = new Map();
+    }
+    if (!room.conversations.has(data.playerName)) {
+      room.conversations.set(data.playerName, []);
+    }
+    
+    const conversationHistory = room.conversations.get(data.playerName);
+    
+    // If conversation already started, don't restart
+    if (conversationHistory.length > 0) {
+      // Send existing conversation history
+      conversationHistory.forEach(msg => {
+        socket.emit('conversation-message', msg);
+      });
+      return;
+    }
+    
+    try {
+      // Get initial ChatGPT greeting
+      const completion = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [
+          { role: 'system', content: CONVERSATION_SYSTEM_PROMPT }
+        ],
+        max_tokens: 150,
+        temperature: 0.7,
+      });
+      
+      const aiResponse = completion.choices[0].message.content;
+      console.log(`Initial ChatGPT greeting for ${data.playerName}:`, aiResponse);
+      
+      // Create AI greeting message
+      const aiMessage = {
+        id: Date.now(),
+        text: aiResponse,
+        timestamp: new Date().toLocaleTimeString(),
+        playerName: 'Life Coach',
+        roomId: data.roomId,
+        role: 'assistant',
+        isAI: true
+      };
+      
+      // Add to history and send to client
+      conversationHistory.push(aiMessage);
+      
+      setTimeout(() => {
+        socket.emit('conversation-message', aiMessage);
+      }, 1500); // Delay for natural feel
+      
+    } catch (error) {
+      console.error('ChatGPT initial greeting error:', error);
+      
+      // Send fallback greeting
+      const fallbackMessage = {
+        id: Date.now(),
+        text: "Welcome! I'm here to explore a meaningful question with you: What new experience or skill would make you feel truly alive again? Take your time to reflect, and share whatever comes to mind.",
+        timestamp: new Date().toLocaleTimeString(),
+        playerName: 'Life Coach',
+        roomId: data.roomId,
+        role: 'assistant',
+        isAI: true
+      };
+      
+      conversationHistory.push(fallbackMessage);
+      socket.emit('conversation-message', fallbackMessage);
+    }
+  });
+
+  // Handle room state requests
+  socket.on('get-room-state', (roomId) => {
+    const room = rooms.get(roomId);
+    if (room) {
+      socket.emit('room-state-update', {
+        finishedPlayers: room.finishedPlayers || []
+      });
+    }
+  });
+
+  // Handle player finishing their conversation
+  socket.on('finish-conversation', (data) => {
+    console.log('Player finished conversation:', data.playerName);
+    
+    const room = rooms.get(data.roomId);
+    if (room) {
+      if (!room.finishedPlayers) {
+        room.finishedPlayers = [];
+      }
+      
+      if (!room.finishedPlayers.includes(data.playerName)) {
+        room.finishedPlayers.push(data.playerName);
+        
+        // Broadcast to all players in the room that this player finished
+        io.to(data.roomId).emit('player-finished-conversation', {
+          playerName: data.playerName,
+          finishedCount: room.finishedPlayers.length,
+          totalPlayers: room.players.length
+        });
+        
+        console.log(`Room ${data.roomId}: ${room.finishedPlayers.length}/${room.players.length} players finished`);
+      }
     }
   });
 
@@ -433,7 +665,7 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.SERVER_PORT || 3001;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
