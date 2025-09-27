@@ -21,6 +21,11 @@ const LoginPage = () => {
       clearBrowserSession();
     }
     
+    if (urlParams.get('reset') === 'true') {
+      setError('🔄 Server has been reset. All data cleared. Please login again.');
+      clearBrowserSession();
+    }
+    
     // Check if there's already an active tab in this window
     const currentSession = checkBrowserSession();
     if (currentSession && !currentSession.isActiveTab) {
