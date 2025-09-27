@@ -24,7 +24,15 @@ const WINDOW_SESSION_ID = getWindowSessionId();
 const createSocket = () => {
   console.log('🔌 Creating socket for window session:', WINDOW_SESSION_ID);
   
-  const socket = io('http://localhost:3001', {
+  // Determine server URL based on environment
+  const SERVER_URL = process.env.REACT_APP_SERVER_URL || 
+    (process.env.NODE_ENV === 'production' 
+      ? 'https://bolrailway-production.up.railway.app' 
+      : 'http://localhost:3001');
+  
+  console.log('🌐 Connecting to server:', SERVER_URL);
+  
+  const socket = io(SERVER_URL, {
     transports: ['websocket'],
     upgrade: true,
     rememberUpgrade: true,

@@ -1,0 +1,13 @@
+[build]
+builder = "NIXPACKS"
+
+[build.env]
+NODE_ENV = "production"
+REACT_APP_SERVER_URL = "https://bolrailway-production.up.railway.app"
+
+[deploy]
+startCommand = "serve -s build -l $PORT"
+healthcheckPath = "/"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10

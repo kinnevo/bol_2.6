@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
+const path = require('path');
 require('dotenv').config();
 const OpenAI = require('openai');
 
@@ -10,7 +11,12 @@ const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
     origin: process.env.NODE_ENV === 'production' 
-      ? [process.env.CLIENT_URL || "https://your-frontend-app.up.railway.app"]
+      ? [
+          process.env.CLIENT_URL || "https://your-frontend-app.up.railway.app",
+          "https://bolrailway-production.up.railway.app",
+          /\.up\.railway\.app$/,
+          /\.railway\.app$/
+        ]
       : ["http://localhost:3000", "http://localhost:3001"],
     methods: ["GET", "POST"],
     credentials: true
@@ -19,7 +25,12 @@ const io = socketIo(server, {
 
 app.use(cors({
   origin: process.env.NODE_ENV === 'production' 
-    ? [process.env.CLIENT_URL || "https://your-frontend-app.up.railway.app"]
+    ? [
+        process.env.CLIENT_URL || "https://your-frontend-app.up.railway.app",
+        "https://bolrailway-production.up.railway.app",
+        /\.up\.railway\.app$/,
+        /\.railway\.app$/
+      ]
     : ["http://localhost:3000", "http://localhost:3001"],
   credentials: true
 }));
@@ -1050,7 +1061,21 @@ io.on('connection', (socket) => {
   });
 });
 
+// Serve static files from React build in production
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(path.join(__dirname, '../build')));
+  
+  // Handle React routing, return all requests to React app
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, '../build/index.html'));
+  });
+}
+
 const PORT = process.env.PORT || process.env.SERVER_PORT || 3001;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  if (process.env.NODE_ENV === 'production') {
+    console.log(`Serving React app from: ${path.join(__dirname, '../build')}`);
+  }
 });
