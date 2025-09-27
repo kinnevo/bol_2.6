@@ -9,12 +9,20 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: "http://localhost:3000",
-    methods: ["GET", "POST"]
+    origin: process.env.NODE_ENV === 'production' 
+      ? [process.env.CLIENT_URL || "https://your-frontend-app.up.railway.app"]
+      : ["http://localhost:3000", "http://localhost:3001"],
+    methods: ["GET", "POST"],
+    credentials: true
   }
 });
 
-app.use(cors());
+app.use(cors({
+  origin: process.env.NODE_ENV === 'production' 
+    ? [process.env.CLIENT_URL || "https://your-frontend-app.up.railway.app"]
+    : ["http://localhost:3000", "http://localhost:3001"],
+  credentials: true
+}));
 app.use(express.json());
 
 // Debug endpoint to check rooms
@@ -1042,7 +1050,7 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = process.env.SERVER_PORT || 3001;
+const PORT = process.env.PORT || process.env.SERVER_PORT || 3001;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
